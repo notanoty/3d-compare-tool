@@ -11,7 +11,7 @@ from PySide6.QtCore import QMimeData, QPoint, QPointF, Qt, QUrl  # noqa: E402
 from PySide6.QtGui import QDragEnterEvent, QDropEvent  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
-from mesh_compare.comparison import compare_meshes  # noqa: E402
+from mesh_compare.comparison import compare_meshes, load_mesh  # noqa: E402
 from mesh_compare.gui import MainWindow  # noqa: E402
 from mesh_compare.scale_dialog import ScaleDialog  # noqa: E402
 from mesh_compare.trim_dialog import TrimDialog  # noqa: E402
@@ -316,3 +316,30 @@ def test_match_scale_unreadable_file(
     window.scan_zone.set_path(broken)
     window.open_scale()
     assert window.status.text().startswith("Error:")
+
+
+def test_several_cuts_copied_to_other_model(
+    window: MainWindow,
+    app: QApplication,
+    mesh_files: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def two_cuts(dialog: TrimDialog) -> int:
+        dialog.add_cut()
+        return int(TrimDialog.DialogCode.Accepted)
+
+    monkeypatch.setattr(TrimDialog, "exec", two_cuts)
+    window.original_zone.set_path(mesh_files[0])
+    window.scan_zone.set_path(mesh_files[1])
+    window.open_trim(window.original_zone)
+    wait_for_worker(window, app)
+
+    paths = [window.original_zone.trimmed_path, window.scan_zone.trimmed_path]
+    assert None not in paths
+    trimmed = [load_mesh(path) for path in paths if path is not None]
+    full = load_mesh(mesh_files[0])
+    for mesh in trimmed:
+        # Both ends cut away: shorter than the full model at the bottom and the top.
+        assert mesh.bounds[0, 2] > full.bounds[0, 2] + 1
+        assert mesh.bounds[1, 2] < full.bounds[1, 2] - 1
+    assert trimmed[1].area == pytest.approx(trimmed[0].area, rel=1e-3)

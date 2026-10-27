@@ -28,10 +28,13 @@ When a model is added, a trimming window opens (turn off with *Open trimming whe
 is added*, or use the **Trim…** buttons later). It shows the model from the front, right,
 back and left.
 
-- Drag on any view to draw the cut line; drag its round ends to tilt or move it.
-- **Remove top / Remove bottom** picks which side is cut away (shown in red on every view).
+- Drag on any view to draw the selected cut line; drag a line's round ends to tilt or move it.
+- **Add cut** adds another line (e.g. one for the base, one for the canal tip); each cut has
+  its own colour and its own **Remove top / Remove bottom** setting. Select a cut in the
+  list (or grab its handle) to change it; **Delete cut** removes it.
+- Red shows everything that will be removed by all cuts together, on every view.
 - **Up axis** changes which way is "up" if the model is lying on its side.
-- **Also apply this cut to …** aligns the other model and cuts it at the same place.
+- **Also apply these cuts to …** aligns the other model and cuts it at the same places.
 - **Trim & save** writes `<name>_trimmed.stl` next to the original file (the original is
   never changed). Comparisons then use the trimmed files.
 

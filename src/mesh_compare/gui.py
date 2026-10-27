@@ -232,7 +232,7 @@ class MainWindow(QMainWindow):
             self.show_error(str(error))
             return
         dialog = TrimDialog(mesh, zone.path.name, other.path.name if other.path else None)
-        if dialog.exec() != TrimDialog.DialogCode.Accepted or (plane := dialog.plane) is None:
+        if dialog.exec() != TrimDialog.DialogCode.Accepted or (planes := dialog.planes) is None:
             return
 
         model_path = zone.path
@@ -246,7 +246,7 @@ class MainWindow(QMainWindow):
             self.status.setText("Saved " + ", ".join(path.name for path in saved))
 
         message = "Trimming…" if other_path is None else "Aligning and trimming both models…"
-        self._run_task(message, lambda: trim_files(plane, model_path, other_path), finished)
+        self._run_task(message, lambda: trim_files(planes, model_path, other_path), finished)
 
     def open_scale(self) -> None:
         """Open the match-scale window, then save the scaled scan and use it."""

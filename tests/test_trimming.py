@@ -10,8 +10,10 @@ from mesh_compare.trimming import (
     Camera,
     SurfaceSamples,
     TrimPlane,
-    copy_cut,
+    apply_cuts,
+    copy_cuts,
     default_line,
+    kept_by_all,
     line_on_view,
     plane_from_line,
     render_view,
@@ -85,6 +87,33 @@ class TestTrimPlane:
         assert np.allclose(actual.bounds, expected.bounds, atol=1e-6)
 
 
+class TestSeveralCuts:
+    def test_two_cuts_keep_the_band_between(self, sphere: trimesh.Trimesh) -> None:
+        below = TrimPlane(np.array([0.0, 0.0, -4.0]), np.array([0.0, 0.0, 1.0]))
+        above = TrimPlane(np.array([0.0, 0.0, 6.0]), np.array([0.0, 0.0, -1.0]))
+        band = apply_cuts([below, above], sphere)
+        assert band.bounds[:, 2] == pytest.approx([-4.0, 6.0])
+        points = np.array([[0.0, 0.0, -5.0], [0.0, 0.0, 0.0], [0.0, 0.0, 7.0]])
+        assert kept_by_all([below, above], points).tolist() == [False, True, False]
+
+    def test_no_cuts_keeps_everything(self, sphere: trimesh.Trimesh) -> None:
+        assert kept_by_all([], np.zeros((3, 3))).all()
+        assert apply_cuts([], sphere) is sphere
+
+    def test_cuts_that_remove_everything_fail(self, sphere: trimesh.Trimesh) -> None:
+        below = TrimPlane(np.array([0.0, 0.0, 2.0]), np.array([0.0, 0.0, 1.0]))
+        above = TrimPlane(np.array([0.0, 0.0, -2.0]), np.array([0.0, 0.0, -1.0]))
+        with pytest.raises(ValueError, match="whole model"):
+            apply_cuts([below, above], sphere)
+
+    @pytest.mark.parametrize("height", [0.1, 0.5, 0.9])
+    def test_default_line_height(
+        self, sphere: trimesh.Trimesh, cameras: list[Camera], height: float
+    ) -> None:
+        (_, y), _ = default_line(cameras[0], sphere, height)
+        assert y == pytest.approx(pixel_row(cameras[0], -RADIUS + 2 * RADIUS * height), abs=0.5)
+
+
 class TestPlaneFromLine:
     @pytest.mark.parametrize(("remove", "kept_sign"), [("bottom", 1.0), ("top", -1.0)])
     def test_horizontal_line(self, cameras: list[Camera], remove: str, kept_sign: float) -> None:
@@ -149,7 +178,7 @@ class TestRendering:
     ) -> None:
         view = render_view(SurfaceSamples.from_mesh(sphere, cameras[1]), cameras[1])
         plane = TrimPlane(np.zeros(3), np.array([0.0, 0.0, 1.0]))
-        rows = np.nonzero(view.removed(plane))[0]
+        rows = np.nonzero(view.removed([plane]))[0]
         assert np.min(rows) >= cameras[1].size / 2 - 1
 
     def test_default_line_removes_tenth_of_sphere(
@@ -159,7 +188,7 @@ class TestRendering:
         start, end = default_line(cameras[0], sphere)
         plane = plane_from_line(cameras[0], start, end, "bottom")
         samples = SurfaceSamples.from_mesh(sphere, cameras[0])
-        assert samples.removed_fraction(plane) == pytest.approx(0.1, abs=0.01)
+        assert samples.removed_fraction([plane]) == pytest.approx(0.1, abs=0.01)
 
 
 class TestCopyAndSave:
@@ -170,7 +199,7 @@ class TestCopyAndSave:
         other.apply_transform(rigid_transform((0.5, -1.0, 2.0), (30.0, 5.0, -10.0)))
 
         trimmed = plane.apply(lumpy_mesh)
-        other_trimmed = copy_cut(plane, lumpy_mesh, other).apply(other)
+        other_trimmed = apply_cuts(copy_cuts([plane], lumpy_mesh, other), other)
         result = compare_meshes(trimmed, other_trimmed, samples=5_000)
         assert result.scan_to_original.rms < 0.005
         assert other_trimmed.area == pytest.approx(trimmed.area, rel=1e-3)
@@ -184,8 +213,8 @@ class TestCopyAndSave:
         lumpy_mesh.export(other)
         plane = TrimPlane(np.array([0.0, 0.0, -2.0]), np.array([0.0, 0.0, 1.0]))
 
-        saved = trim_files(plane, model, other)
+        saved = trim_files([plane], model, other)
         assert saved == [tmp_path / "original_trimmed.stl", tmp_path / "scan_trimmed.stl"]
         for path in saved:
             assert load_mesh(path).bounds[0, 2] == pytest.approx(-2.0, abs=0.01)
-        assert trim_files(plane, model) == saved[:1]
+        assert trim_files([plane], model) == saved[:1]

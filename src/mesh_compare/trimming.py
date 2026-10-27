@@ -1,4 +1,4 @@
-"""Plane trimming: four side-view renders, a cut plane drawn as a line, and the cut itself.
+"""Plane trimming: four side-view renders, cut planes drawn as lines, and the cuts themselves.
 
 The views are simple orthographic renders made by splatting dense surface samples
 into a z-buffer. Every pixel remembers the 3D point it shows, so the part a cut
@@ -7,6 +7,7 @@ would remove can be re-highlighted instantly while the user drags the line.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -73,6 +74,25 @@ class TrimPlane:
         if len(faces) == 0:
             raise ValueError("This cut removes the whole model")
         return trimesh.Trimesh(vertices, faces)
+
+
+def kept_by_all(planes: Sequence[TrimPlane], points: FloatArray) -> NDArray[np.bool_]:
+    """True for points that no plane cuts away."""
+    kept = np.ones(len(points), dtype=bool)
+    for plane in planes:
+        kept &= plane.keeps(points)
+    return kept
+
+
+def apply_cuts(planes: Sequence[TrimPlane], mesh: trimesh.Trimesh) -> trimesh.Trimesh:
+    """Cut ``mesh`` with every plane in turn and return what is left.
+
+    Raises:
+        ValueError: If the cuts together remove the whole model.
+    """
+    for plane in planes:
+        mesh = plane.apply(mesh)
+    return mesh
 
 
 @dataclass(frozen=True)
@@ -150,10 +170,10 @@ class RenderedView:
     mask: NDArray[np.bool_]
     positions: FloatArray
 
-    def removed(self, plane: TrimPlane) -> NDArray[np.bool_]:
-        """Pixels showing surface that ``plane`` would cut away."""
+    def removed(self, planes: Sequence[TrimPlane]) -> NDArray[np.bool_]:
+        """Pixels showing surface that any of ``planes`` would cut away."""
         removed = np.zeros_like(self.mask)
-        removed[self.mask] = ~plane.keeps(self.positions[self.mask])
+        removed[self.mask] = ~kept_by_all(planes, self.positions[self.mask])
         return removed
 
 
@@ -173,9 +193,9 @@ class SurfaceSamples:
         normals = np.asarray(mesh.face_normals, dtype=np.float64)[faces]
         return cls(np.asarray(points, dtype=np.float64), normals)
 
-    def removed_fraction(self, plane: TrimPlane) -> float:
-        """Approximate share of the surface area the plane removes."""
-        return float(np.mean(~plane.keeps(self.points)))
+    def removed_fraction(self, planes: Sequence[TrimPlane]) -> float:
+        """Approximate share of the surface area the planes together remove."""
+        return float(np.mean(~kept_by_all(planes, self.points)))
 
 
 def render_view(samples: SurfaceSamples, camera: Camera) -> RenderedView:
@@ -278,12 +298,12 @@ def line_on_view(plane: TrimPlane, camera: Camera) -> tuple[FloatArray, FloatArr
 
 
 def default_line(
-    camera: Camera, mesh: trimesh.Trimesh
+    camera: Camera, mesh: trimesh.Trimesh, height: float = 0.1
 ) -> tuple[tuple[float, float], tuple[float, float]]:
-    """A horizontal line a tenth of the way up the model, across the whole image."""
+    """A level line across the image at ``height`` (0 = bottom, 1 = top) of the model."""
     heights = np.asarray(mesh.vertices - camera.center) @ camera.up
     low, high = float(np.min(heights)), float(np.max(heights))
-    level = low + 0.1 * (high - low)
+    level = low + height * (high - low)
     y = camera.size / 2 - level * camera.size / (2 * camera.half_size)
     margin = camera.size * 0.08
     return (margin, float(y)), (camera.size - margin, float(y))
@@ -294,33 +314,37 @@ def trimmed_path(source: Path) -> Path:
     return source.with_name(f"{source.stem}_trimmed.stl")
 
 
-def copy_cut(plane: TrimPlane, model: trimesh.Trimesh, other: trimesh.Trimesh) -> TrimPlane:
-    """Express ``plane`` (drawn on ``model``) in ``other``'s coordinates.
+def copy_cuts(
+    planes: Sequence[TrimPlane], model: trimesh.Trimesh, other: trimesh.Trimesh
+) -> list[TrimPlane]:
+    """Express ``planes`` (drawn on ``model``) in ``other``'s coordinates.
 
-    ``other`` is aligned onto ``model``; the returned plane then cuts ``other`` at
-    the same place on the object, so both trimmed models end in the same spot.
-
+    ``other`` is aligned onto ``model``; the returned planes then cut ``other`` at
+    the same places on the object, so both trimmed models end in the same spots.
     """
     transform, _ = align_scan(other, model)
-    return plane.transformed(np.linalg.inv(transform))
+    inverse = np.linalg.inv(transform)
+    return [plane.transformed(inverse) for plane in planes]
 
 
-def trim_files(plane: TrimPlane, model_path: Path, other_path: Path | None = None) -> list[Path]:
-    """Trim the model (and optionally the other model with the same cut) and save them.
+def trim_files(
+    planes: Sequence[TrimPlane], model_path: Path, other_path: Path | None = None
+) -> list[Path]:
+    """Trim the model (and optionally the other model with the same cuts) and save them.
 
     Args:
-        plane: Cut in ``model_path``'s coordinates.
+        planes: Cuts in ``model_path``'s coordinates.
         model_path: The model the cut was drawn on.
-        other_path: Another model to cut at the same place, after aligning it.
+        other_path: Another model to cut at the same places, after aligning it.
 
     Returns:
         Paths of the saved trimmed files, model first.
     """
     model = load_mesh(model_path)
-    targets = [(model_path, plane.apply(model))]
+    targets = [(model_path, apply_cuts(planes, model))]
     if other_path is not None:
         other = load_mesh(other_path)
-        targets.append((other_path, copy_cut(plane, model, other).apply(other)))
+        targets.append((other_path, apply_cuts(copy_cuts(planes, model, other), other)))
 
     saved = []
     for source, trimmed in targets:
