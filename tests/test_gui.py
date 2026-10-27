@@ -195,7 +195,7 @@ def test_trim_saves_and_is_used_for_comparison(
     assert "Saved original_trimmed.stl" in window.status.text()
 
 
-def test_trim_copied_to_other_model(
+def test_trim_not_copied_by_default(
     window: MainWindow,
     app: QApplication,
     mesh_files: tuple[Path, Path],
@@ -204,7 +204,27 @@ def test_trim_copied_to_other_model(
     window.original_zone.set_path(mesh_files[0])
     window.scan_zone.set_path(mesh_files[1])
     window.open_trim(window.scan_zone)
-    assert accept_trim[0].copy_to_other
+    assert not accept_trim[0].copy_to_other
+    wait_for_worker(window, app)
+
+    assert window.scan_zone.active_path == mesh_files[1].with_name("scan_trimmed.stl")
+    assert window.original_zone.active_path == mesh_files[0]
+
+
+def test_trim_copied_to_other_model(
+    window: MainWindow,
+    app: QApplication,
+    mesh_files: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def accept_with_copy(dialog: TrimDialog) -> int:
+        dialog.copy_box.setChecked(True)
+        return int(TrimDialog.DialogCode.Accepted)
+
+    monkeypatch.setattr(TrimDialog, "exec", accept_with_copy)
+    window.original_zone.set_path(mesh_files[0])
+    window.scan_zone.set_path(mesh_files[1])
+    window.open_trim(window.scan_zone)
     wait_for_worker(window, app)
 
     assert window.scan_zone.active_path == mesh_files[1].with_name("scan_trimmed.stl")
@@ -326,6 +346,7 @@ def test_several_cuts_copied_to_other_model(
 ) -> None:
     def two_cuts(dialog: TrimDialog) -> int:
         dialog.add_cut()
+        dialog.copy_box.setChecked(True)
         return int(TrimDialog.DialogCode.Accepted)
 
     monkeypatch.setattr(TrimDialog, "exec", two_cuts)

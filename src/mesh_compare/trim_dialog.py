@@ -179,7 +179,7 @@ class TrimDialog(QDialog):
             if other_name
             else "Also apply to other model"
         )
-        self.copy_box.setChecked(other_name is not None)
+        self.copy_box.setChecked(False)
         self.copy_box.setEnabled(other_name is not None)
         self.info = QLabel()
         skip = QPushButton("Skip")

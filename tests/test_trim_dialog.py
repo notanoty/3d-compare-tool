@@ -50,7 +50,8 @@ def test_opens_with_one_bottom_cut(dialog: TrimDialog) -> None:
     assert not dialog.delete_button.isEnabled()
     assert "Removes about" in dialog.info.text()
     assert dialog.trim_button.isEnabled()
-    assert dialog.copy_to_other
+    assert dialog.copy_box.isEnabled()
+    assert not dialog.copy_to_other  # copying the cuts is opt-in
     for canvas in dialog.canvases:
         assert not canvas.image.isNull()
         assert len(canvas.lines) == 1  # a level cut is edge-on in every side view
