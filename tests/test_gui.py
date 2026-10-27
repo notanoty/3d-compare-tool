@@ -12,8 +12,10 @@ from PySide6.QtGui import QDragEnterEvent, QDropEvent  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from mesh_compare.comparison import compare_meshes  # noqa: E402
-from mesh_compare.gui import MainWindow, TaskWorker  # noqa: E402
+from mesh_compare.gui import MainWindow  # noqa: E402
+from mesh_compare.scale_dialog import ScaleDialog  # noqa: E402
 from mesh_compare.trim_dialog import TrimDialog  # noqa: E402
+from mesh_compare.workers import TaskWorker  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -252,3 +254,65 @@ def test_auto_trim_opens_after_adding_model(
     app.processEvents()
     assert len(accept_trim) == 1
     wait_for_worker(window, app)
+
+
+@pytest.mark.parametrize("compare_after", [True, False])
+def test_match_scale_saves_scaled_scan(
+    window: MainWindow,
+    app: QApplication,
+    tmp_path: Path,
+    lumpy_mesh: trimesh.Trimesh,
+    accept_trim: list[TrimDialog],
+    monkeypatch: pytest.MonkeyPatch,
+    compare_after: bool,
+) -> None:
+    original, scan = tmp_path / "original.stl", tmp_path / "scan.stl"
+    lumpy_mesh.export(original)
+    small = lumpy_mesh.copy()
+    small.vertices = small.vertices / 100.0
+    small.export(scan)
+
+    def fake_exec(dialog: ScaleDialog) -> int:
+        dialog.set_scale(100.0)
+        dialog.compare_after = compare_after
+        return int(ScaleDialog.DialogCode.Accepted)
+
+    monkeypatch.setattr(ScaleDialog, "exec", fake_exec)
+    window.original_zone.set_path(original)
+    window.scan_zone.set_path(scan)
+    assert window.scale_button.isEnabled()
+    window.auto_trim.setChecked(True)
+    window.scale_button.click()
+    wait_for_worker(window, app)
+
+    assert window.scan_zone.path == tmp_path / "scan_scaled.stl"
+    app.processEvents()
+    assert accept_trim == []  # scaling must not pop up the trim window
+    if compare_after:  # the comparison ran as a follow-up while waiting above
+        item = window.table.item(0, 1)
+        assert item is not None and float(item.text().split()[0]) < 0.01
+    else:
+        assert window._worker is None
+        assert "scaled × 100" in window.status.text()
+
+
+def test_match_scale_cancel_changes_nothing(
+    window: MainWindow, mesh_files: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(ScaleDialog, "exec", lambda self: int(ScaleDialog.DialogCode.Rejected))
+    window.original_zone.set_path(mesh_files[0])
+    window.scan_zone.set_path(mesh_files[1])
+    window.open_scale()
+    assert window._worker is None
+    assert window.scan_zone.path == mesh_files[1]
+
+
+def test_match_scale_unreadable_file(
+    window: MainWindow, tmp_path: Path, mesh_files: tuple[Path, Path]
+) -> None:
+    broken = tmp_path / "broken.stl"
+    broken.write_text("not a mesh")
+    window.original_zone.set_path(mesh_files[0])
+    window.scan_zone.set_path(broken)
+    window.open_scale()
+    assert window.status.text().startswith("Error:")

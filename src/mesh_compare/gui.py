@@ -6,7 +6,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TypeVar
 
-from PySide6.QtCore import Qt, QThread, QTimer, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QDragEnterEvent, QDropEvent, QGuiApplication, QMouseEvent
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -31,8 +31,11 @@ from mesh_compare.comparison import (
     format_size,
     load_mesh,
 )
+from mesh_compare.scale_dialog import ScaleDialog
+from mesh_compare.scaling import scale_file
 from mesh_compare.trim_dialog import TrimDialog
 from mesh_compare.trimming import trim_files
+from mesh_compare.workers import TaskWorker
 
 T = TypeVar("T")
 
@@ -123,25 +126,6 @@ class DropZone(QFrame):
         self.setStyleSheet(f"DropZone {{ border: 2px dashed {colour}; border-radius: 10px; }}")
 
 
-class TaskWorker(QThread):
-    """Runs a slow task off the UI thread so the window stays responsive."""
-
-    succeeded = Signal(object)
-    failed = Signal(str)
-
-    def __init__(self, task: Callable[[], object]) -> None:
-        super().__init__()
-        self.task = task
-
-    def run(self) -> None:
-        try:
-            result = self.task()
-        except Exception as error:  # report any failure in the window instead of crashing
-            self.failed.emit(str(error))
-        else:
-            self.succeeded.emit(result)
-
-
 class MainWindow(QMainWindow):
     """Top-level window holding the drop zones, options and results table."""
 
@@ -151,6 +135,8 @@ class MainWindow(QMainWindow):
         self.resize(720, 620)
         self._worker: TaskWorker | None = None
         self._result: ComparisonResult | None = None
+        self._after_task: Callable[[], None] | None = None
+        self._suppress_auto_trim = False
 
         self.original_zone = DropZone("Original model")
         self.scan_zone = DropZone("New scan")
@@ -163,6 +149,10 @@ class MainWindow(QMainWindow):
             zone.path_changed.connect(lambda _path, z=zone: self._model_added(z))
         self.auto_trim = QCheckBox("Open trimming when a model is added")
         self.auto_trim.setChecked(True)
+        self.scale_button = QPushButton("Match scale…")
+        self.scale_button.setToolTip("Show both models side by side and scale the scan to match")
+        self.scale_button.setEnabled(False)
+        self.scale_button.clicked.connect(self.open_scale)
 
         self.tolerance = QDoubleSpinBox(
             minimum=0.01, maximum=5.0, singleStep=0.05, value=0.1, decimals=2, suffix=" mm"
@@ -203,7 +193,11 @@ class MainWindow(QMainWindow):
 
         layout = QVBoxLayout()
         layout.addLayout(zones)
-        layout.addWidget(self.auto_trim)
+        options = QHBoxLayout()
+        options.addWidget(self.auto_trim)
+        options.addStretch()
+        options.addWidget(self.scale_button)
+        layout.addLayout(options)
         layout.addLayout(controls)
         layout.addWidget(self.status)
         layout.addWidget(self.table, stretch=1)
@@ -254,22 +248,62 @@ class MainWindow(QMainWindow):
         message = "Trimming…" if other_path is None else "Aligning and trimming both models…"
         self._run_task(message, lambda: trim_files(plane, model_path, other_path), finished)
 
+    def open_scale(self) -> None:
+        """Open the match-scale window, then save the scaled scan and use it."""
+        original_path, scan_path = self.original_zone.active_path, self.scan_zone.active_path
+        if original_path is None or scan_path is None or self._worker is not None:
+            return
+        try:
+            original, scan = load_mesh(original_path), load_mesh(scan_path)
+        except Exception as error:  # unreadable file: say so instead of crashing
+            self.show_error(str(error))
+            return
+        dialog = ScaleDialog(original, scan, original_path.name, scan_path.name)
+        if dialog.exec() != ScaleDialog.DialogCode.Accepted:
+            return
+        factor = dialog.scale
+
+        def finished(saved: Path) -> None:
+            self._suppress_auto_trim = True
+            self.scan_zone.set_path(saved)
+            self._suppress_auto_trim = False
+            self.status.setStyleSheet("")
+            self.status.setText(f"Saved {saved.name} (scaled × {factor:.6g})")
+
+        self._run_task(
+            "Scaling…",
+            lambda: scale_file(scan_path, factor),
+            finished,
+            then=self.start_comparison if dialog.compare_after else None,
+        )
+
     def _model_added(self, zone: DropZone) -> None:
         self.trim_buttons[zone].setEnabled(True)
         self._update_compare_button()
-        if self.auto_trim.isChecked():
+        if self.auto_trim.isChecked() and not self._suppress_auto_trim:
             # Let the drop finish before opening a modal window.
             QTimer.singleShot(0, lambda: self.open_trim(zone))
 
     def _run_task(
-        self, message: str, task: Callable[[], T], on_success: Callable[[T], None]
+        self,
+        message: str,
+        task: Callable[[], T],
+        on_success: Callable[[T], None],
+        then: Callable[[], None] | None = None,
     ) -> None:
+        """Run ``task`` in the background; ``then`` runs after it succeeds and finishes."""
         if self._worker is not None:
             return
+        self._after_task = None
+
+        def succeeded(result: T) -> None:
+            on_success(result)
+            self._after_task = then
+
         self.status.setStyleSheet("")
         self.status.setText(message)
         self._worker = TaskWorker(task)
-        self._worker.succeeded.connect(on_success)
+        self._worker.succeeded.connect(succeeded)
         self._worker.failed.connect(self.show_error)
         self._worker.finished.connect(self._worker_finished)
         self._set_busy(True)
@@ -319,6 +353,9 @@ class MainWindow(QMainWindow):
     def _worker_finished(self) -> None:
         self._worker = None
         self._set_busy(False)
+        follow_up, self._after_task = self._after_task, None
+        if follow_up is not None:
+            follow_up()
 
     def _set_busy(self, busy: bool) -> None:
         for zone, button in self.trim_buttons.items():
@@ -328,3 +365,4 @@ class MainWindow(QMainWindow):
     def _update_compare_button(self) -> None:
         ready = self.original_zone.path is not None and self.scan_zone.path is not None
         self.compare_button.setEnabled(ready and self._worker is None)
+        self.scale_button.setEnabled(ready and self._worker is None)

@@ -192,31 +192,45 @@ def _apply(transform: FloatArray, points: FloatArray) -> FloatArray:
     return points @ transform[:3, :3].T + transform[:3, 3]
 
 
-def _rigid_fit(source: FloatArray, target: FloatArray) -> FloatArray:
-    """Best rigid transform mapping ``source`` onto ``target`` (Kabsch, no scaling)."""
+def _rigid_fit(source: FloatArray, target: FloatArray, with_scale: bool = False) -> FloatArray:
+    """Best rigid transform mapping ``source`` onto ``target`` (Kabsch).
+
+    With ``with_scale`` it also fits a uniform scale factor (Umeyama).
+    """
     src_center = source.mean(axis=0)
     dst_center = target.mean(axis=0)
-    covariance = (source - src_center).T @ (target - dst_center)
-    u, _, vt = np.linalg.svd(covariance)
+    centered = source - src_center
+    covariance = centered.T @ (target - dst_center)
+    u, singular, vt = np.linalg.svd(covariance)
     reflection_fix = np.diag([1.0, 1.0, np.sign(np.linalg.det(vt.T @ u.T))])
     rotation = vt.T @ reflection_fix @ u.T
+    if with_scale:
+        rotation *= np.trace(np.diag(singular) @ reflection_fix) / np.sum(centered**2)
     transform = np.eye(4)
     transform[:3, :3] = rotation
     transform[:3, 3] = dst_center - rotation @ src_center
     return transform
 
 
-def _plane_fit(source: FloatArray, target: FloatArray, normals: FloatArray) -> FloatArray:
-    """Small rigid step minimising point-to-plane distances (linearised least squares)."""
+def _plane_fit(
+    source: FloatArray, target: FloatArray, normals: FloatArray, with_scale: bool = False
+) -> FloatArray:
+    """Small rigid step minimising point-to-plane distances (linearised least squares).
+
+    With ``with_scale`` it also fits a small uniform scale change about the centroid.
+    """
     center = source.mean(axis=0)
     centered = source - center
-    system = np.hstack([np.cross(centered, normals), normals])
+    columns = [np.cross(centered, normals), normals]
+    if with_scale:
+        columns.append(np.einsum("ij,ij->i", centered, normals)[:, None])
     offsets = np.einsum("ij,ij->i", target - source, normals)
-    solution, *_ = np.linalg.lstsq(system, offsets, rcond=None)
-    rotation = Rotation.from_rotvec(solution[:3]).as_matrix()
+    solution, *_ = np.linalg.lstsq(np.hstack(columns), offsets, rcond=None)
+    scale = 1.0 + solution[6] if with_scale else 1.0
+    rotation = scale * Rotation.from_rotvec(solution[:3]).as_matrix()
     transform = np.eye(4)
     transform[:3, :3] = rotation
-    transform[:3, 3] = center + solution[3:] - rotation @ center
+    transform[:3, 3] = center + solution[3:6] - rotation @ center
     return transform
 
 
@@ -317,6 +331,38 @@ def align_scan(
     best_guess, _ = min(candidates, key=lambda candidate: candidate[1])
     refined, _ = _icp(fine_source, target_tree, target, best_guess, iterations=50)
     return _icp(fine_source, target_tree, target, refined, 100, target_normals)
+
+
+def estimate_scale(scan: trimesh.Trimesh, original: trimesh.Trimesh, seed: int = 0) -> float:
+    """Uniform scale factor that best makes ``scan`` the same size as ``original``.
+
+    Starts from the surface-area ratio and aligns, then refines pose and scale
+    together: first point-to-point (robust while far off), then point-to-plane
+    (precise). Treat the result as a starting point: if the two models are
+    trimmed differently, the overlapping parts may not determine the size well.
+    """
+    initial = float(np.sqrt(original.area / scan.area))
+    sized = trimesh.Trimesh(scan.vertices * initial, scan.faces, process=False)
+    transform, _ = align_scan(sized, original, seed)
+
+    target, target_normals = _sample_with_normals(original, 50_000, seed)
+    target_tree = cKDTree(target)
+    source = _sample_surface(sized, 10_000, seed + 3)
+    for iterations, normals in ((30, None), (200, target_normals)):
+        for _ in range(iterations):
+            moved = _apply(transform, source)
+            dist, idx = target_tree.query(moved)
+            if normals is not None:
+                dist = np.abs(np.einsum("ij,ij->i", moved - target[idx], normals[idx]))
+            keep = dist <= np.quantile(dist, ICP_OVERLAP)
+            if normals is None:
+                step = _rigid_fit(moved[keep], target[idx[keep]], with_scale=True)
+            else:
+                step = _plane_fit(moved[keep], target[idx[keep]], normals[idx[keep]], True)
+            transform = step @ transform
+            if np.allclose(step, np.eye(4), atol=1e-9):
+                break
+    return initial * float(np.cbrt(np.linalg.det(transform[:3, :3])))
 
 
 def signed_distances(points: FloatArray, mesh: trimesh.Trimesh) -> FloatArray:

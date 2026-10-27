@@ -35,6 +35,21 @@ back and left.
 - **Trim & save** writes `<name>_trimmed.stl` next to the original file (the original is
   never changed). Comparisons then use the trimmed files.
 
+### Matching scale
+
+Phone/photo scans (e.g. Polycam photo mode) often have no real-world size. Click
+**Match scale…** to see both models side by side at the same mm-per-pixel over a
+millimetre grid, then scale the scan:
+
+- drag the slider or type an exact factor; **× 1000 (m → mm)** and **× 10 (cm → mm)**
+  fix plain unit mix-ups;
+- **Auto-fit** estimates the factor by fitting the scan's shape to the original — check
+  that the two then look the same size;
+- **Apply** saves `<name>_scaled.stl` and uses it; **Apply & compare** also runs the comparison.
+
+Note: when the scale is fitted, the comparison measures shape accuracy only, not whether
+the scanner got the absolute size right.
+
 The scan is aligned to the original automatically (rigid only; no scaling).
 Both files are assumed to be in millimetres; you get a warning if their sizes differ a lot.
 
