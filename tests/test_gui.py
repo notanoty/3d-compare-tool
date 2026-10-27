@@ -12,7 +12,8 @@ from PySide6.QtGui import QDragEnterEvent, QDropEvent  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from mesh_compare.comparison import compare_meshes  # noqa: E402
-from mesh_compare.gui import CompareWorker, MainWindow  # noqa: E402
+from mesh_compare.gui import MainWindow, TaskWorker  # noqa: E402
+from mesh_compare.trim_dialog import TrimDialog  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -24,6 +25,7 @@ def app() -> QApplication:
 @pytest.fixture
 def window(app: QApplication) -> Iterator[MainWindow]:
     win = MainWindow()
+    win.auto_trim.setChecked(False)
     yield win
     win.close()
 
@@ -57,20 +59,23 @@ def test_show_result_fills_table_and_copies(
     assert app.clipboard().text().startswith("Metric")
 
 
-def test_worker_reports_success_and_failure(mesh_files: tuple[Path, Path], tmp_path: Path) -> None:
+def test_worker_reports_success_and_failure() -> None:
     results: list[object] = []
     errors: list[str] = []
 
-    good = CompareWorker(*mesh_files, tolerance=0.1, align=False)
+    good = TaskWorker(lambda: 42)
     good.succeeded.connect(results.append)
     good.run()
 
-    bad = CompareWorker(tmp_path / "missing.stl", mesh_files[1], tolerance=0.1, align=False)
+    def explode() -> None:
+        raise ValueError("bad file")
+
+    bad = TaskWorker(explode)
     bad.failed.connect(errors.append)
     bad.run()
 
-    assert len(results) == 1
-    assert len(errors) == 1
+    assert results == [42]
+    assert errors == ["bad file"]
 
 
 def test_show_error(window: MainWindow) -> None:
@@ -146,3 +151,104 @@ def test_warnings_shown_in_status(window: MainWindow, lumpy_mesh: trimesh.Trimes
     scan.apply_scale(10.0)
     window.show_result(compare_meshes(lumpy_mesh, scan, samples=1_000, align=False))
     assert window.status.text().startswith("⚠")
+
+
+def wait_for_worker(window: MainWindow, app: QApplication) -> None:
+    worker = window._worker
+    assert worker is not None
+    worker.wait()
+    while window._worker is not None:
+        app.processEvents()
+
+
+@pytest.fixture
+def accept_trim(monkeypatch: pytest.MonkeyPatch) -> list[TrimDialog]:
+    """Make trim dialogs accept immediately with their default cut; records them."""
+    opened: list[TrimDialog] = []
+
+    def fake_exec(dialog: TrimDialog) -> int:
+        opened.append(dialog)
+        return int(TrimDialog.DialogCode.Accepted)
+
+    monkeypatch.setattr(TrimDialog, "exec", fake_exec)
+    return opened
+
+
+def test_trim_saves_and_is_used_for_comparison(
+    window: MainWindow,
+    app: QApplication,
+    mesh_files: tuple[Path, Path],
+    accept_trim: list[TrimDialog],
+) -> None:
+    window.original_zone.set_path(mesh_files[0])
+    assert window.trim_buttons[window.original_zone].isEnabled()
+    window.trim_buttons[window.original_zone].click()
+    assert len(accept_trim) == 1
+    assert not accept_trim[0].copy_to_other  # no scan loaded yet
+    wait_for_worker(window, app)
+
+    trimmed = mesh_files[0].with_name("original_trimmed.stl")
+    assert trimmed.exists()
+    assert window.original_zone.active_path == trimmed
+    assert "Saved original_trimmed.stl" in window.status.text()
+
+
+def test_trim_copied_to_other_model(
+    window: MainWindow,
+    app: QApplication,
+    mesh_files: tuple[Path, Path],
+    accept_trim: list[TrimDialog],
+) -> None:
+    window.original_zone.set_path(mesh_files[0])
+    window.scan_zone.set_path(mesh_files[1])
+    window.open_trim(window.scan_zone)
+    assert accept_trim[0].copy_to_other
+    wait_for_worker(window, app)
+
+    assert window.scan_zone.active_path == mesh_files[1].with_name("scan_trimmed.stl")
+    assert window.original_zone.active_path == mesh_files[0].with_name("original_trimmed.stl")
+
+    window.start_comparison()
+    wait_for_worker(window, app)
+    item = window.table.item(0, 1)
+    assert item is not None and float(item.text().split()[0]) < 0.01
+
+
+def test_skipping_trim_changes_nothing(
+    window: MainWindow, mesh_files: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(TrimDialog, "exec", lambda self: int(TrimDialog.DialogCode.Rejected))
+    window.original_zone.set_path(mesh_files[0])
+    window.open_trim(window.original_zone)
+    assert window._worker is None
+    assert window.original_zone.active_path == mesh_files[0]
+
+
+def test_new_file_clears_trimmed_version(window: MainWindow, mesh_files: tuple[Path, Path]) -> None:
+    window.original_zone.set_path(mesh_files[0])
+    window.original_zone.set_trimmed(mesh_files[1])
+    assert "using scan.stl" in window.original_zone._label.text()
+    window.original_zone.set_path(mesh_files[0])
+    assert window.original_zone.active_path == mesh_files[0]
+
+
+def test_unreadable_model_shows_error(window: MainWindow, tmp_path: Path) -> None:
+    broken = tmp_path / "broken.stl"
+    broken.write_text("not a mesh")
+    window.original_zone.set_path(broken)
+    window.open_trim(window.original_zone)
+    assert window.status.text().startswith("Error:")
+
+
+def test_auto_trim_opens_after_adding_model(
+    window: MainWindow,
+    app: QApplication,
+    mesh_files: tuple[Path, Path],
+    accept_trim: list[TrimDialog],
+) -> None:
+    window.auto_trim.setChecked(True)
+    window.original_zone.set_path(mesh_files[0])
+    assert accept_trim == []  # opens once the drop has finished
+    app.processEvents()
+    assert len(accept_trim) == 1
+    wait_for_worker(window, app)

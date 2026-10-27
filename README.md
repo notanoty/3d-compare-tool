@@ -22,6 +22,19 @@ python3.13 -m venv .venv
 2. Set the tolerance (default ±0.1 mm) and click **Compare**.
 3. **Copy results** puts a tab-separated table on the clipboard for Excel / Google Sheets.
 
+### Trimming
+
+When a model is added, a trimming window opens (turn off with *Open trimming when a model
+is added*, or use the **Trim…** buttons later). It shows the model from the front, right,
+back and left.
+
+- Drag on any view to draw the cut line; drag its round ends to tilt or move it.
+- **Remove top / Remove bottom** picks which side is cut away (shown in red on every view).
+- **Up axis** changes which way is "up" if the model is lying on its side.
+- **Also apply this cut to …** aligns the other model and cuts it at the same place.
+- **Trim & save** writes `<name>_trimmed.stl` next to the original file (the original is
+  never changed). Comparisons then use the trimmed files.
+
 The scan is aligned to the original automatically (rigid only; no scaling).
 Both files are assumed to be in millimetres; you get a warning if their sizes differ a lot.
 
