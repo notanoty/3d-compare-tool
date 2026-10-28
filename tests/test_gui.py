@@ -13,6 +13,7 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from mesh_compare.comparison import compare_meshes, load_mesh  # noqa: E402
 from mesh_compare.gui import MainWindow  # noqa: E402
+from mesh_compare.heatmap_dialog import HeatMapDialog  # noqa: E402
 from mesh_compare.scale_dialog import ScaleDialog  # noqa: E402
 from mesh_compare.trim_dialog import TrimDialog  # noqa: E402
 from mesh_compare.workers import TaskWorker  # noqa: E402
@@ -143,9 +144,48 @@ def test_full_comparison_in_background(
     worker.wait()
     while window._worker is not None:
         app.processEvents()
-    assert window.status.text() == "Done."
+    assert window.status.text() == "Done."  # the heat map build leaves the status alone
     assert window.table.rowCount() == 7
     assert window.compare_button.isEnabled()
+    assert window._heatmap is not None
+    assert window.heatmap_button.isEnabled()
+    assert window.heatmap_button.text() == "Heat map…"
+
+
+def test_new_file_clears_heatmap(
+    window: MainWindow, app: QApplication, mesh_files: tuple[Path, Path]
+) -> None:
+    window.original_zone.set_path(mesh_files[0])
+    window.scan_zone.set_path(mesh_files[1])
+    window.start_comparison()
+    wait_for_worker(window, app)
+    assert window.heatmap_button.isEnabled()
+    window.scan_zone.set_path(mesh_files[0])
+    assert window._heatmap is None
+    assert not window.heatmap_button.isEnabled()
+
+
+def test_open_heatmap_shows_dialog(
+    window: MainWindow,
+    app: QApplication,
+    mesh_files: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    opened: list[HeatMapDialog] = []
+
+    def fake_exec(dialog: HeatMapDialog) -> int:
+        opened.append(dialog)
+        return int(HeatMapDialog.DialogCode.Accepted)
+
+    monkeypatch.setattr(HeatMapDialog, "exec", fake_exec)
+    window.original_zone.set_path(mesh_files[0])
+    window.scan_zone.set_path(mesh_files[1])
+    window.start_comparison()
+    wait_for_worker(window, app)
+    window.heatmap_button.click()
+    assert len(opened) == 1
+    assert opened[0].default_path == mesh_files[1].with_name("scan_heatmap.png")
+    assert not opened[0].image.isNull()
 
 
 def test_warnings_shown_in_status(window: MainWindow, lumpy_mesh: trimesh.Trimesh) -> None:

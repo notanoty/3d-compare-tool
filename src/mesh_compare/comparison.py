@@ -122,6 +122,8 @@ class ComparisonResult:
         scan_size: Bounding-box extents of the scan.
         sample_count: Points sampled on each surface.
         warnings: Human-readable problems worth checking.
+        scan_transform: Transform that placed the scan onto the original, or ``None``
+            if the scan was compared as-is.
     """
 
     scan_to_original: DeviationStats
@@ -131,6 +133,7 @@ class ComparisonResult:
     scan_size: tuple[float, float, float]
     sample_count: int
     warnings: list[str] = field(default_factory=list)
+    scan_transform: FloatArray | None = None
 
     def metric_rows(self) -> list[tuple[str, str, str]]:
         """Return ``(label, scan->original, original->scan)`` rows formatted for display."""
@@ -429,6 +432,7 @@ def compare_meshes(
 
     placed = scan.copy()
     alignment_rmse: float | None = None
+    transform: FloatArray | None = None
     if align:
         transform, alignment_rmse = align_scan(scan, original, seed)
         placed.apply_transform(transform)
@@ -447,4 +451,5 @@ def compare_meshes(
         scan_size=(scan_size[0], scan_size[1], scan_size[2]),
         sample_count=samples,
         warnings=warnings,
+        scan_transform=transform,
     )

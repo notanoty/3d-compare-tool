@@ -21,6 +21,7 @@ python3.13 -m venv .venv
    (or click a box to browse). Supported: STL, PLY, OBJ, OFF, glTF.
 2. Set the tolerance (default ±0.1 mm) and click **Compare**.
 3. **Copy results** puts a tab-separated table on the clipboard for Excel / Google Sheets.
+4. **Heat map…** (ready a moment after the numbers) shows where the scan deviates — see below.
 
 ### Trimming
 
@@ -55,6 +56,20 @@ the scanner got the absolute size right.
 
 The scan is aligned to the original automatically (rigid only; no scaling).
 Both files are assumed to be in millimetres; you get a warning if their sizes differ a lot.
+
+### Heat map
+
+After each comparison a deviation heat map is built: the original model seen from the front,
+right, back and left, coloured by how far the scan is from each point.
+
+- **Green**: within the tolerance.
+- **Yellow → red**: scan larger (outside the original); **cyan → blue**: scan smaller.
+- **Magenta**: missing in the scan — the scan is further away than *Missing beyond*
+  (default 5 × tolerance, at least 0.5 mm). The caption gives the missing share of the
+  visible surface.
+
+Change the **Up axis** if the views are sideways, adjust **Missing beyond**, then
+**Save image…** to download it as PNG or JPG (with legend and file names).
 
 ## Reading the results
 

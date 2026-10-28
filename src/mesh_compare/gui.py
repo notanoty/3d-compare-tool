@@ -31,6 +31,8 @@ from mesh_compare.comparison import (
     format_size,
     load_mesh,
 )
+from mesh_compare.heatmap import HeatMap, build_heatmap, default_missing_threshold
+from mesh_compare.heatmap_dialog import HeatMapDialog
 from mesh_compare.scale_dialog import ScaleDialog
 from mesh_compare.scaling import scale_file
 from mesh_compare.trim_dialog import TrimDialog
@@ -134,7 +136,12 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Mesh Compare")
         self.resize(720, 620)
         self._worker: TaskWorker | None = None
+        # Holds the last finished worker: dropping it inside its own ``finished``
+        # signal would delete the thread object while Qt is still using it.
+        self._finished_worker: TaskWorker | None = None
         self._result: ComparisonResult | None = None
+        self._compared: tuple[Path, Path] | None = None
+        self._heatmap: HeatMap | None = None
         self._after_task: Callable[[], None] | None = None
         self._suppress_auto_trim = False
 
@@ -165,6 +172,10 @@ class MainWindow(QMainWindow):
         self.copy_button = QPushButton("Copy results")
         self.copy_button.setEnabled(False)
         self.copy_button.clicked.connect(self.copy_results)
+        self.heatmap_button = QPushButton("Heat map…")
+        self.heatmap_button.setToolTip("Show which parts of the original the scan is missing")
+        self.heatmap_button.setEnabled(False)
+        self.heatmap_button.clicked.connect(self.open_heatmap)
 
         self.table = QTableWidget(0, 3)
         self.table.setHorizontalHeaderLabels(["Metric", "Scan → Original", "Original → Scan"])
@@ -189,6 +200,7 @@ class MainWindow(QMainWindow):
         controls.addWidget(self.align_box)
         controls.addStretch()
         controls.addWidget(self.copy_button)
+        controls.addWidget(self.heatmap_button)
         controls.addWidget(self.compare_button)
 
         layout = QVBoxLayout()
@@ -213,13 +225,53 @@ class MainWindow(QMainWindow):
         if original is None or scan is None:
             return
         tolerance, align = self.tolerance.value(), self.align_box.isChecked()
+        self._compared = (original, scan)
+        self._clear_heatmap()
         self._run_task(
             "Comparing… (aligning and measuring can take a few seconds)",
             lambda: compare_meshes(
                 load_mesh(original), load_mesh(scan), tolerance=tolerance, align=align
             ),
             self.show_result,
+            then=self._start_heatmap,
         )
+
+    def _start_heatmap(self) -> None:
+        """Build the deviation heat map for the last comparison in the background."""
+        if self._result is None or self._compared is None:
+            return
+        original, scan = self._compared
+        transform, tolerance = self._result.scan_transform, self._result.scan_to_original.tolerance
+
+        def finished(heatmap: HeatMap) -> None:
+            self._heatmap = heatmap
+            self.heatmap_button.setText("Heat map…")
+            self.heatmap_button.setEnabled(True)
+
+        self.heatmap_button.setText("Building heat map…")
+        self._run_task(
+            None,
+            lambda: build_heatmap(load_mesh(original), load_mesh(scan), transform, tolerance),
+            finished,
+        )
+
+    def open_heatmap(self) -> None:
+        """Show the heat map window for the last comparison."""
+        if self._heatmap is None or self._compared is None:
+            return
+        original, scan = self._compared
+        dialog = HeatMapDialog(
+            self._heatmap,
+            f"{original.name}  vs  {scan.name}  (tolerance ±{self._heatmap.tolerance:g} mm)",
+            scan.with_name(f"{scan.stem}_heatmap.png"),
+            default_missing_threshold(self._heatmap.tolerance),
+        )
+        dialog.exec()
+
+    def _clear_heatmap(self) -> None:
+        self._heatmap = None
+        self.heatmap_button.setText("Heat map…")
+        self.heatmap_button.setEnabled(False)
 
     def open_trim(self, zone: DropZone) -> None:
         """Open the trimming window for ``zone``'s model, then trim and save in the background."""
@@ -279,6 +331,7 @@ class MainWindow(QMainWindow):
 
     def _model_added(self, zone: DropZone) -> None:
         self.trim_buttons[zone].setEnabled(True)
+        self._clear_heatmap()
         self._update_compare_button()
         if self.auto_trim.isChecked() and not self._suppress_auto_trim:
             # Let the drop finish before opening a modal window.
@@ -286,12 +339,15 @@ class MainWindow(QMainWindow):
 
     def _run_task(
         self,
-        message: str,
+        message: str | None,
         task: Callable[[], T],
         on_success: Callable[[T], None],
         then: Callable[[], None] | None = None,
     ) -> None:
-        """Run ``task`` in the background; ``then`` runs after it succeeds and finishes."""
+        """Run ``task`` in the background; ``then`` runs after it succeeds and finishes.
+
+        With ``message`` set to ``None`` the status line is left as it is.
+        """
         if self._worker is not None:
             return
         self._after_task = None
@@ -300,8 +356,9 @@ class MainWindow(QMainWindow):
             on_success(result)
             self._after_task = then
 
-        self.status.setStyleSheet("")
-        self.status.setText(message)
+        if message is not None:
+            self.status.setStyleSheet("")
+            self.status.setText(message)
         self._worker = TaskWorker(task)
         self._worker.succeeded.connect(succeeded)
         self._worker.failed.connect(self.show_error)
@@ -351,7 +408,9 @@ class MainWindow(QMainWindow):
             self.status.setText("Results copied to clipboard.")
 
     def _worker_finished(self) -> None:
-        self._worker = None
+        self._finished_worker, self._worker = self._worker, None
+        if self._heatmap is None:  # a failed heat map build leaves no "Building…" behind
+            self.heatmap_button.setText("Heat map…")
         self._set_busy(False)
         follow_up, self._after_task = self._after_task, None
         if follow_up is not None:
