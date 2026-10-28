@@ -32,6 +32,7 @@ from mesh_compare.trimming import (
     render_view,
     side_cameras,
 )
+from mesh_compare.widgets import ScrollArea, fit_to_screen
 from mesh_compare.workers import TaskWorker
 
 MIN_SCALE = 1e-4
@@ -181,12 +182,14 @@ class ScaleDialog(QDialog):
             )
         )
         layout.addLayout(top)
-        layout.addLayout(models)
+        # The models scroll on small screens so the controls below stay reachable.
+        layout.addWidget(ScrollArea(models), stretch=1)
         layout.addLayout(scale_row)
         layout.addLayout(quick)
         layout.addLayout(buttons)
         self._render()
         self.set_scale(1.0)
+        fit_to_screen(self)
 
     def set_scale(self, factor: float) -> None:
         """Set the scan's scale factor, keeping the slider and number box in sync."""

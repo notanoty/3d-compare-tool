@@ -36,6 +36,7 @@ from mesh_compare.trimming import (
     render_view,
     side_cameras,
 )
+from mesh_compare.widgets import ScrollArea, fit_to_screen
 
 BACKGROUND = np.array([245, 245, 245], dtype=np.float64)
 REMOVED_TINT = np.array([230, 40, 40], dtype=np.float64)
@@ -221,10 +222,12 @@ class TrimDialog(QDialog):
             )
         )
         layout.addLayout(cuts_row)
-        layout.addLayout(grid)
+        # The views scroll on small screens so the buttons below stay reachable.
+        layout.addWidget(ScrollArea(grid), stretch=1)
         layout.addWidget(self.info)
         layout.addLayout(buttons)
         self._render_views()
+        fit_to_screen(self)
 
     @property
     def cameras(self) -> list[Camera]:

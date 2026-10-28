@@ -6,7 +6,7 @@ from pathlib import Path
 
 import numpy as np
 from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPixmap
+from PySide6.QtGui import QColor, QFont, QImage, QPainter
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 
 from mesh_compare.heatmap import MISSING_COLOUR, HeatMap, deviation_colours
 from mesh_compare.trimming import UP_AXES
+from mesh_compare.widgets import FitImage, fit_to_screen
 from mesh_compare.workers import TaskWorker
 
 MARGIN = 16
@@ -184,7 +185,8 @@ class HeatMapDialog(QDialog):
         # signal would delete the thread object while Qt is still using it.
         self._finished_worker: TaskWorker | None = None
 
-        self.picture = QLabel(alignment=Qt.AlignmentFlag.AlignCenter)
+        # Scaled to fit the window; Save image always writes the full-size image.
+        self.picture = FitImage()
         self.up_axis = QComboBox()
         self.up_axis.addItems(list(UP_AXES))
         self.up_axis.setCurrentText(heatmap.up_axis)
@@ -215,10 +217,11 @@ class HeatMapDialog(QDialog):
         controls.addWidget(close)
 
         layout = QVBoxLayout(self)
-        layout.addWidget(self.picture)
+        layout.addWidget(self.picture, stretch=1)
         layout.addLayout(controls)
         layout.addWidget(self.status)
         self._redraw()
+        fit_to_screen(self)
 
     def set_up_axis(self, up_axis: str) -> None:
         """Show the heat map around ``up_axis``, rendering it in the background if needed."""
@@ -271,4 +274,4 @@ class HeatMapDialog(QDialog):
 
     def _redraw(self) -> None:
         self.image = heatmap_image(self.heatmap, self.threshold.value(), self.title)
-        self.picture.setPixmap(QPixmap.fromImage(self.image))
+        self.picture.set_image(self.image)
