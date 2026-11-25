@@ -33,6 +33,14 @@ def test_scale_file(tmp_path: Path, lumpy_mesh: trimesh.Trimesh) -> None:
     assert np.allclose(load_mesh(saved).extents, lumpy_mesh.extents * 0.001, rtol=1e-5)
 
 
+def test_scale_file_to_output_dir(tmp_path: Path, lumpy_mesh: trimesh.Trimesh) -> None:
+    source, out = tmp_path / "scan.stl", tmp_path / "out"
+    out.mkdir()
+    lumpy_mesh.export(source)
+    assert scale_file(source, 2.0, out) == out / "scan_scaled.stl"
+    assert (out / "scan_scaled.stl").exists()
+
+
 @pytest.mark.parametrize(
     ("span", "step"), [(38.6, 5.0), (100.0, 10.0), (0.23, 0.05), (12.0, 2.0), (1.0, 0.1)]
 )

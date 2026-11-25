@@ -6,7 +6,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TypeVar
 
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import QSettings, Qt, QTimer, Signal
 from PySide6.QtGui import QDragEnterEvent, QDropEvent, QGuiApplication, QMouseEvent
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -40,6 +40,9 @@ from mesh_compare.trimming import trim_files
 from mesh_compare.workers import TaskWorker
 
 T = TypeVar("T")
+
+DEFAULT_RESULTS_NAME = "data.txt"
+SETTINGS_OUTPUT_DIR = "output_dir"
 
 EXPLANATION = (
     "<b>Scan → Original</b>: how accurate the scanned surface is "
@@ -140,6 +143,7 @@ class MainWindow(QMainWindow):
         # signal would delete the thread object while Qt is still using it.
         self._finished_worker: TaskWorker | None = None
         self._result: ComparisonResult | None = None
+        self._save_dir: Path | None = None
         self._compared: tuple[Path, Path] | None = None
         self._heatmap: HeatMap | None = None
         self._after_task: Callable[[], None] | None = None
@@ -161,6 +165,24 @@ class MainWindow(QMainWindow):
         self.scale_button.setEnabled(False)
         self.scale_button.clicked.connect(self.open_scale)
 
+        # Where new models (trimmed, scaled) and heat map images are saved; None = next to
+        # the source file. Remembered between runs.
+        self._settings = QSettings(
+            QSettings.Format.IniFormat, QSettings.Scope.UserScope, "Dopple", "MeshCompare"
+        )
+        saved_dir = str(self._settings.value(SETTINGS_OUTPUT_DIR, "") or "")
+        self.output_dir: Path | None = None
+        if saved_dir and Path(saved_dir).is_dir():
+            self.output_dir = Path(saved_dir)
+        self.output_label = QLabel(wordWrap=True)
+        self.output_button = QPushButton("Choose folder…")
+        self.output_button.setToolTip("Folder where trimmed and scaled models are saved")
+        self.output_button.clicked.connect(self.choose_output_dir)
+        self.output_reset = QPushButton("Next to model")
+        self.output_reset.setToolTip("Save new models next to the file they were made from")
+        self.output_reset.clicked.connect(lambda: self.set_output_dir(None))
+        self._refresh_output_label()
+
         self.tolerance = QDoubleSpinBox(
             minimum=0.01, maximum=5.0, singleStep=0.05, value=0.1, decimals=2, suffix=" mm"
         )
@@ -172,6 +194,10 @@ class MainWindow(QMainWindow):
         self.copy_button = QPushButton("Copy results")
         self.copy_button.setEnabled(False)
         self.copy_button.clicked.connect(self.copy_results)
+        self.save_button = QPushButton("Save results…")
+        self.save_button.setToolTip("Save results as a text file (default name data.txt)")
+        self.save_button.setEnabled(False)
+        self.save_button.clicked.connect(self.save_results)
         self.heatmap_button = QPushButton("Heat map…")
         self.heatmap_button.setToolTip("Show which parts of the original the scan is missing")
         self.heatmap_button.setEnabled(False)
@@ -200,6 +226,7 @@ class MainWindow(QMainWindow):
         controls.addWidget(self.align_box)
         controls.addStretch()
         controls.addWidget(self.copy_button)
+        controls.addWidget(self.save_button)
         controls.addWidget(self.heatmap_button)
         controls.addWidget(self.compare_button)
 
@@ -210,6 +237,12 @@ class MainWindow(QMainWindow):
         options.addStretch()
         options.addWidget(self.scale_button)
         layout.addLayout(options)
+        output_row = QHBoxLayout()
+        output_row.addWidget(QLabel("Save new models to:"))
+        output_row.addWidget(self.output_label, stretch=1)
+        output_row.addWidget(self.output_button)
+        output_row.addWidget(self.output_reset)
+        layout.addLayout(output_row)
         layout.addLayout(controls)
         layout.addWidget(self.status)
         layout.addWidget(self.table, stretch=1)
@@ -263,7 +296,7 @@ class MainWindow(QMainWindow):
         dialog = HeatMapDialog(
             self._heatmap,
             f"{original.name}  vs  {scan.name}  (tolerance ±{self._heatmap.tolerance:g} mm)",
-            scan.with_name(f"{scan.stem}_heatmap.png"),
+            (self.output_dir or scan.parent) / f"{scan.stem}_heatmap.png",
             default_missing_threshold(self._heatmap.tolerance),
         )
         dialog.exec()
@@ -288,6 +321,7 @@ class MainWindow(QMainWindow):
             return
 
         model_path = zone.path
+        output_dir = self.output_dir
         other_path = other.path if dialog.copy_to_other else None
         targets = [zone] + ([other] if other_path else [])
 
@@ -298,7 +332,9 @@ class MainWindow(QMainWindow):
             self.status.setText("Saved " + ", ".join(path.name for path in saved))
 
         message = "Trimming…" if other_path is None else "Aligning and trimming both models…"
-        self._run_task(message, lambda: trim_files(planes, model_path, other_path), finished)
+        self._run_task(
+            message, lambda: trim_files(planes, model_path, other_path, output_dir), finished
+        )
 
     def open_scale(self) -> None:
         """Open the match-scale window, then save the scaled scan and use it."""
@@ -314,6 +350,7 @@ class MainWindow(QMainWindow):
         if dialog.exec() != ScaleDialog.DialogCode.Accepted:
             return
         factor = dialog.scale
+        output_dir = self.output_dir
 
         def finished(saved: Path) -> None:
             self._suppress_auto_trim = True
@@ -324,10 +361,34 @@ class MainWindow(QMainWindow):
 
         self._run_task(
             "Scaling…",
-            lambda: scale_file(scan_path, factor),
+            lambda: scale_file(scan_path, factor, output_dir),
             finished,
             then=self.start_comparison if dialog.compare_after else None,
         )
+
+    def choose_output_dir(self) -> None:
+        """Ask for the folder where new models are saved."""
+        start = self.output_dir or (self.scan_zone.path or self.original_zone.path or Path.home())
+        chosen = QFileDialog.getExistingDirectory(
+            self, "Save new models to", str(start if start.is_dir() else start.parent)
+        )
+        if chosen:
+            self.set_output_dir(Path(chosen))
+
+    def set_output_dir(self, folder: Path | None) -> None:
+        """Save new models in ``folder`` (``None`` = next to the source file) and remember it."""
+        self.output_dir = folder
+        self._settings.setValue(SETTINGS_OUTPUT_DIR, str(folder) if folder else "")
+        self._refresh_output_label()
+
+    def _refresh_output_label(self) -> None:
+        if self.output_dir is None:
+            self.output_label.setText("<i>next to each model</i>")
+            self.output_label.setToolTip("")
+        else:
+            self.output_label.setText(self.output_dir.name or str(self.output_dir))
+            self.output_label.setToolTip(str(self.output_dir))
+        self.output_reset.setEnabled(self.output_dir is not None)
 
     def _model_added(self, zone: DropZone) -> None:
         self.trim_buttons[zone].setEnabled(True)
@@ -394,6 +455,7 @@ class MainWindow(QMainWindow):
             self.status.setStyleSheet("")
             self.status.setText("Done.")
         self.copy_button.setEnabled(True)
+        self.save_button.setEnabled(True)
 
     def show_error(self, message: str) -> None:
         """Display a failure message."""
@@ -406,6 +468,28 @@ class MainWindow(QMainWindow):
             QGuiApplication.clipboard().setText(self._result.as_text())
             self.status.setStyleSheet("")
             self.status.setText("Results copied to clipboard.")
+
+    def save_results(self) -> None:
+        """Save results as tab-separated text to a file chosen by the user."""
+        if self._result is None:
+            return
+        folder = self._save_dir or (
+            self.original_zone.path.parent if self.original_zone.path else Path.home()
+        )
+        chosen, _ = QFileDialog.getSaveFileName(
+            self, "Save results", str(folder / DEFAULT_RESULTS_NAME), "Text files (*.txt)"
+        )
+        if not chosen:
+            return
+        path = Path(chosen)
+        try:
+            path.write_text(self._result.as_text(), encoding="utf-8")
+        except OSError as error:
+            self.show_error(f"could not save results: {error}")
+            return
+        self._save_dir = path.parent
+        self.status.setStyleSheet("")
+        self.status.setText(f"Results saved to {path}.")
 
     def _worker_finished(self) -> None:
         self._finished_worker, self._worker = self._worker, None

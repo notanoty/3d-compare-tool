@@ -1,6 +1,22 @@
+from collections.abc import Iterator
+from pathlib import Path
+
 import numpy as np
 import pytest
 import trimesh
+
+
+@pytest.fixture(autouse=True)
+def isolated_settings(tmp_path_factory: pytest.TempPathFactory) -> Iterator[None]:
+    """Keep the app's saved settings (e.g. the output folder) out of the tests."""
+    try:
+        from PySide6.QtCore import QSettings
+    except ImportError:  # pragma: no cover
+        yield
+        return
+    folder: Path = tmp_path_factory.mktemp("settings")
+    QSettings.setPath(QSettings.Format.IniFormat, QSettings.Scope.UserScope, str(folder))
+    yield
 
 
 @pytest.fixture(scope="session")

@@ -17,6 +17,10 @@ python3.13 -m venv .venv
 
 ## Use
 
+**Save new models to** (main window): pick a folder with **Choose folder…** and every
+trimmed / scaled model and the default heat map image go there. **Next to model** goes back
+to saving beside the source file. The choice is remembered between runs.
+
 1. Drop the **original model** into the left box and the **new scan** into the right box
    (or click a box to browse). Supported: STL, PLY, OBJ, OFF, glTF.
 2. Set the tolerance (default ±0.1 mm) and click **Compare**.
@@ -36,8 +40,8 @@ back and left.
 - Red shows everything that will be removed by all cuts together, on every view.
 - **Up axis** changes which way is "up" if the model is lying on its side.
 - **Also apply these cuts to …** aligns the other model and cuts it at the same places.
-- **Trim & save** writes `<name>_trimmed.stl` next to the original file (the original is
-  never changed). Comparisons then use the trimmed files.
+- **Trim & save** writes `<name>_trimmed.stl` into the *Save new models to* folder (the
+  original is never changed). Comparisons then use the trimmed files.
 
 ### Matching scale
 
@@ -65,7 +69,7 @@ right, back and left, coloured by how far the scan is from each point.
 - **Green**: within the tolerance.
 - **Yellow → red**: scan larger (outside the original); **cyan → blue**: scan smaller.
 - **Magenta**: missing in the scan — the scan is further away than *Missing beyond*
-  (default 5 × tolerance, at least 0.5 mm). The caption gives the missing share of the
+  (default 0.5 mm). The caption gives the missing share of the
   visible surface.
 
 Change the **Up axis** if the views are sideways, adjust **Missing beyond**, then

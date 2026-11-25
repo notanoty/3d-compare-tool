@@ -68,7 +68,8 @@ def test_threshold_must_exceed_tolerance() -> None:
 
 def test_default_missing_threshold() -> None:
     assert default_missing_threshold(0.05) == 0.5
-    assert default_missing_threshold(0.2) == pytest.approx(1.0)
+    assert default_missing_threshold(0.2) == 0.5
+    assert default_missing_threshold(0.6) == pytest.approx(0.61)
 
 
 def test_identical_meshes_have_nothing_missing(complete: HeatMap) -> None:

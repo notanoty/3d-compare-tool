@@ -28,16 +28,15 @@ WITHIN_COLOUR = np.array([34, 197, 94], dtype=np.float64)
 LARGER_STOPS = np.array([WITHIN_COLOUR, [250, 204, 21], [220, 38, 38]], dtype=np.float64)
 SMALLER_STOPS = np.array([WITHIN_COLOUR, [34, 211, 238], [37, 99, 235]], dtype=np.float64)
 MISSING_COLOUR = np.array([217, 70, 239], dtype=np.float64)
-# Deviations beyond this many tolerances (but at least MIN_MISSING_MM) count as missing.
-MISSING_TOLERANCES = 5.0
-MIN_MISSING_MM = 0.5
+# Deviations beyond this count as missing (raised just above the tolerance if needed).
+DEFAULT_MISSING_MM = 0.5
 # Darkest shading applied on top of the colours, so the shape stays readable.
 MIN_BRIGHTNESS = 0.5
 
 
 def default_missing_threshold(tolerance: float) -> float:
     """Deviation above which a point of the original counts as missing in the scan."""
-    return max(MISSING_TOLERANCES * tolerance, MIN_MISSING_MM)
+    return max(DEFAULT_MISSING_MM, round(tolerance + 0.01, 2))
 
 
 def _ramp(t: FloatArray, stops: FloatArray) -> FloatArray:
