@@ -75,6 +75,48 @@ right, back and left, coloured by how far the scan is from each point.
 Change the **Up axis** if the views are sideways, adjust **Missing beyond**, then
 **Save image…** to download it as PNG or JPG (with legend and file names).
 
+## Let Claude do it (MCP server)
+
+`mesh_compare.mcp_server` is an [MCP](https://modelcontextprotocol.io) server, so Claude can
+trim, scale and compare models and save every image itself. It needs nothing beyond the
+normal install.
+
+Add it to the Claude desktop app (*Settings → Developer → Edit Config*, file
+`claude_desktop_config.json`) and restart the app:
+
+```json
+{
+  "mcpServers": {
+    "mesh-compare": {
+      "command": "/Users/notanoty/projects/dev/3d-compare-tool/.venv/bin/python",
+      "args": ["-m", "mesh_compare.mcp_server"]
+    }
+  }
+}
+```
+
+(After `pip install -e .` the `mesh-compare-mcp` command does the same.)
+
+| Tool | Does |
+|---|---|
+| `list_models`, `model_info`, `view_model` | Find model files, sizes, four-side render |
+| `preview_trim` | Four views with pixel grid, height ruler, cut lines and the removed part in red. Saves nothing |
+| `trim_model` | Cut and save `<name>_trimmed.stl` + `<trimmed>_cuts.png`; optionally the other model at the same places |
+| `open_manual_trim` / `manual_trim_result` | **Manual mode**: opens the trimming window on your screen (with Claude's proposed cuts), you adjust and click *Trim & save*, Claude gets the files and the cuts you used |
+| `auto_scale` | Auto-fit scale, save `<scan>_scaled.stl` + `_scale-check.png` (grey overlap, orange only original, blue only scan) |
+| `scale_model` | Scale by an exact factor (e.g. × 1000) |
+| `compare_models` | Compare, save `data.txt` + `heatmap.png` into the chosen folder |
+
+Cuts are JSON, either a level line at a fraction of the model height or a pixel line on a
+view (the same 360 px views as the trimming window, so cuts move between the two):
+
+```json
+[{"view": "Front", "remove": "bottom", "height": 0.15, "tilt_deg": 5},
+ {"view": "Right", "remove": "top", "line": [[40, 70], [320, 95]]}]
+```
+
+Nothing is overwritten unless the call says `overwrite: true`.
+
 ## Reading the results
 
 | Column | Measures | Made worse by |
@@ -92,3 +134,21 @@ Signed values: **+** means the scan is larger than the original, **−** smaller
 .venv/bin/mypy src tests
 .venv/bin/ruff check src tests && .venv/bin/black --check src tests
 ```
+
+## Detail heat map
+
+Besides the standard heat map (green inside ±tolerance, yellow/red and cyan/blue
+up to the missing threshold), Compare also saves `heatmap_detail.png`. The detail
+map has no flat green band. Colours run dark green → green → lime → yellow →
+orange → red over the deviations that actually occur:
+
+- the best-matching point of the original gets the first colour. That colour is
+  dark green when the best point is close to the original and moves up the ramp
+  (towards yellow) when even the best point is far off;
+- red is the 99th percentile of the deviations that are not missing, so a few stray
+  points do not flatten everything else;
+- missing areas (beyond the missing threshold) stay magenta.
+
+The colour shows the size of the deviation, not its sign; use the standard map for
+"scan larger / smaller". In the heat map window, switch with **Colours: Tolerance /
+Detail (relative)**; Save image suggests `<name>_detail.png` for the detail view.
