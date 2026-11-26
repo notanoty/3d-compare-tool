@@ -16,8 +16,11 @@ from mesh_compare.heatmap import (  # noqa: E402
     MISSING_COLOUR,
     WITHIN_COLOUR,
     HeatMap,
+    DETAIL_STOPS,
     build_heatmap,
     default_missing_threshold,
+    detail_colours,
+    detail_range,
     deviation_colours,
 )
 from mesh_compare.heatmap_dialog import HeatMapDialog, heatmap_image  # noqa: E402
@@ -68,7 +71,8 @@ def test_threshold_must_exceed_tolerance() -> None:
 
 def test_default_missing_threshold() -> None:
     assert default_missing_threshold(0.05) == 0.5
-    assert default_missing_threshold(0.2) == pytest.approx(1.0)
+    assert default_missing_threshold(0.2) == 0.5
+    assert default_missing_threshold(0.6) == pytest.approx(0.61)
 
 
 def test_identical_meshes_have_nothing_missing(complete: HeatMap) -> None:
@@ -174,3 +178,39 @@ def test_dialog_threshold_and_up_axis(app: QApplication, incomplete: HeatMap) ->
     dialog.up_axis.setCurrentText("+Z")  # cached: no new render
     assert dialog._worker is None
     assert dialog.heatmap is incomplete
+
+
+def test_detail_range_starts_green_for_close_match() -> None:
+    distances = np.array([0.001, 0.02, -0.05, 0.1, -0.15, 0.3, 2.0, np.nan])
+    colour_range = detail_range(distances, 0.5)
+    assert colour_range.low == pytest.approx(0.001)
+    assert colour_range.low < colour_range.high <= 0.5  # missing points are left out
+    assert colour_range.start < 0.01
+
+
+def test_detail_range_starts_further_up_when_best_match_is_far() -> None:
+    colour_range = detail_range(np.array([0.4, 0.45, 0.48]), 0.5)
+    assert colour_range.start == pytest.approx(0.48)
+
+
+def test_detail_colours_spread_inside_tolerance() -> None:
+    distances = np.array([0.0, 0.02, 0.05, 0.08, 2.0])
+    colour_range = detail_range(distances, 0.5)
+    colours = detail_colours(distances, colour_range, 0.5)
+    np.testing.assert_array_equal(colours[0], DETAIL_STOPS[0].astype(np.uint8))
+    np.testing.assert_array_equal(colours[3], DETAIL_STOPS[-1].astype(np.uint8))
+    # All inside a 0.1 mm tolerance, yet all different (the standard map shows one green).
+    assert len({tuple(c) for c in colours[:4]}) == 4
+    np.testing.assert_array_equal(colours[4], MISSING_COLOUR)
+    standard = deviation_colours(distances[:4], 0.1, 0.5)
+    assert len({tuple(c) for c in standard}) == 1
+
+
+def test_detail_heatmap_image_and_dialog_toggle(app: QApplication, incomplete: HeatMap) -> None:
+    standard = heatmap_image(incomplete, 0.5, "a vs b")
+    detail = heatmap_image(incomplete, 0.5, "a vs b", detail=True)
+    assert detail.size() == standard.size() and detail != standard
+    dialog = HeatMapDialog(incomplete, "a vs b", Path("scan_heatmap.png"), 0.5)
+    assert not dialog.detail
+    dialog.scale.setCurrentText("Detail (relative)")
+    assert dialog.detail and dialog.image == detail

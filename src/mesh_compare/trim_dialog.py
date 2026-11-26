@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 import numpy as np
@@ -132,6 +133,7 @@ class TrimDialog(QDialog):
         title: str,
         other_name: str | None = None,
         view_size: int = 360,
+        up_axis: str = "+Z",
     ) -> None:
         super().__init__()
         self.setWindowTitle(f"Trim — {title}")
@@ -157,6 +159,7 @@ class TrimDialog(QDialog):
 
         self.up_axis = QComboBox()
         self.up_axis.addItems(list(UP_AXES))
+        self.up_axis.setCurrentText(up_axis)
         self.up_axis.currentTextChanged.connect(self._render_views)
 
         self.cut_list = QListWidget()
@@ -256,6 +259,18 @@ class TrimDialog(QDialog):
         self.cuts.append(CutLine(0, start, end, side))
         self.select_cut(len(self.cuts) - 1)
 
+    def set_cuts(self, cuts: Sequence[CutLine]) -> None:
+        """Replace all cuts (lines in this window's pixel coordinates) and select the first.
+
+        Raises:
+            ValueError: If ``cuts`` is empty.
+        """
+        if not cuts:
+            raise ValueError("At least one cut is needed")
+        self.cuts = list(cuts)
+        self.active = 0
+        self._refresh()
+
     def delete_cut(self) -> None:
         """Delete the selected cut (the last remaining cut cannot be deleted)."""
         if len(self.cuts) <= 1:
@@ -299,7 +314,7 @@ class TrimDialog(QDialog):
         valid = [plane for plane in planes if plane is not None]
 
         for view_index, (view, canvas) in enumerate(zip(self.views, self.canvases, strict=True)):
-            canvas.image = _view_image(view, valid)
+            canvas.image = view_image(view, valid)
             canvas.lines = []
             canvas.handles = []
             for cut_index, (cut, plane) in enumerate(zip(self.cuts, planes, strict=True)):
@@ -379,7 +394,8 @@ class TrimDialog(QDialog):
         self._grabbed = None
 
 
-def _view_image(view: RenderedView, planes: list[TrimPlane]) -> QImage:
+def view_image(view: RenderedView, planes: Sequence[TrimPlane]) -> QImage:
+    """``view`` as a grey image with everything ``planes`` remove tinted red."""
     rgb = np.repeat(view.shade[..., None].astype(np.float64), 3, axis=2)
     rgb[~view.mask] = BACKGROUND
     removed = view.removed(planes)

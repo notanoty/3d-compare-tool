@@ -12,9 +12,10 @@ from mesh_compare.comparison import load_mesh
 GRID_STEPS_MM = (1.0, 2.0, 5.0)
 
 
-def scaled_path(source: Path) -> Path:
-    """Where the scaled copy of ``source`` is saved: next to it, ``<name>_scaled.stl``."""
-    return source.with_name(f"{source.stem}_scaled.stl")
+def scaled_path(source: Path, output_dir: Path | None = None) -> Path:
+    """Where the scaled copy of ``source`` is saved: ``<name>_scaled.stl`` in
+    ``output_dir``, or next to ``source`` when no folder is given."""
+    return (output_dir or source.parent) / f"{source.stem}_scaled.stl"
 
 
 def scale_mesh(mesh: trimesh.Trimesh, factor: float) -> trimesh.Trimesh:
@@ -28,13 +29,14 @@ def scale_mesh(mesh: trimesh.Trimesh, factor: float) -> trimesh.Trimesh:
     return trimesh.Trimesh(mesh.vertices * factor, mesh.faces, process=False)
 
 
-def scale_file(source: Path, factor: float) -> Path:
-    """Scale the model in ``source`` by ``factor`` and save it next to the original.
+def scale_file(source: Path, factor: float, output_dir: Path | None = None) -> Path:
+    """Scale the model in ``source`` by ``factor`` and save it in ``output_dir``
+    (next to the original when ``None``).
 
     Returns:
         Path of the saved ``<name>_scaled.stl``.
     """
-    destination = scaled_path(source)
+    destination = scaled_path(source, output_dir)
     scale_mesh(load_mesh(source), factor).export(destination)
     return destination
 

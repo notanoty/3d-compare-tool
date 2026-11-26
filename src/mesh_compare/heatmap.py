@@ -28,16 +28,35 @@ WITHIN_COLOUR = np.array([34, 197, 94], dtype=np.float64)
 LARGER_STOPS = np.array([WITHIN_COLOUR, [250, 204, 21], [220, 38, 38]], dtype=np.float64)
 SMALLER_STOPS = np.array([WITHIN_COLOUR, [34, 211, 238], [37, 99, 235]], dtype=np.float64)
 MISSING_COLOUR = np.array([217, 70, 239], dtype=np.float64)
-# Deviations beyond this many tolerances (but at least MIN_MISSING_MM) count as missing.
-MISSING_TOLERANCES = 5.0
-MIN_MISSING_MM = 0.5
+# Deviations beyond this count as missing (raised just above the tolerance if needed).
+DEFAULT_MISSING_MM = 0.5
 # Darkest shading applied on top of the colours, so the shape stays readable.
 MIN_BRIGHTNESS = 0.5
+
+# Detail heat map: one ramp from "matches the original" to "far off", stretched over
+# the deviations that actually occur instead of the fixed ±tolerance band.
+DETAIL_STOPS = np.array(
+    [
+        [21, 128, 61],  # dark green: closest
+        [34, 197, 94],  # green
+        [163, 230, 53],  # lime
+        [250, 204, 21],  # yellow
+        [249, 115, 22],  # orange
+        [220, 38, 38],  # red: furthest (not missing)
+    ],
+    dtype=np.float64,
+)
+# The ramp ends at this percentile of the non-missing deviations, so a few
+# stray points do not squash everything else into the green.
+DETAIL_HIGH_PERCENTILE = 99.0
+# How far up the ramp the closest point can start (0.6 = yellow) when even the
+# best match is at the missing threshold.
+DETAIL_MAX_START = 0.6
 
 
 def default_missing_threshold(tolerance: float) -> float:
     """Deviation above which a point of the original counts as missing in the scan."""
-    return max(MISSING_TOLERANCES * tolerance, MIN_MISSING_MM)
+    return max(DEFAULT_MISSING_MM, round(tolerance + 0.01, 2))
 
 
 def _ramp(t: FloatArray, stops: FloatArray) -> FloatArray:
@@ -76,6 +95,65 @@ def deviation_colours(
 
 
 @dataclass(frozen=True)
+class DetailRange:
+    """Colour range of the detail heat map.
+
+    Attributes:
+        low: Smallest |deviation| (mm) seen on the original: the best-matching point.
+        high: |deviation| (mm) at the red end of the ramp.
+        start: Ramp position (0-1) of ``low``. Near 0 (dark green) when the best
+            point is close to the original, up to ``DETAIL_MAX_START`` (yellow)
+            when even the best point is at the missing threshold.
+    """
+
+    low: float
+    high: float
+    start: float
+
+
+def detail_range(distances: FloatArray, missing_threshold: float) -> DetailRange:
+    """Colour range for the detail heat map of these deviations.
+
+    The range runs from the smallest |deviation| to the ``DETAIL_HIGH_PERCENTILE``
+    of the deviations that are not missing (|deviation| <= ``missing_threshold``).
+    """
+    absolute = np.abs(distances[np.isfinite(distances)])
+    kept = absolute[absolute <= missing_threshold]
+    if kept.size == 0:  # everything is missing
+        return DetailRange(missing_threshold, missing_threshold, DETAIL_MAX_START)
+    low = float(kept.min())
+    high = float(np.percentile(kept, DETAIL_HIGH_PERCENTILE))
+    if high <= low:
+        high = min(low + 1e-3, missing_threshold) if low < missing_threshold else low + 1e-3
+    start = float(np.clip(low / missing_threshold, 0.0, 1.0)) * DETAIL_MAX_START
+    return DetailRange(low, high, start)
+
+
+def detail_colours(
+    distances: FloatArray, colour_range: DetailRange, missing_threshold: float
+) -> NDArray[np.uint8]:
+    """Map deviations to RGB colours relative to the best-matching point.
+
+    The closest point gets the ramp colour at ``colour_range.start`` (green when it
+    is close to the original, yellow when it is far off); larger deviations run up
+    the ramp towards red at ``colour_range.high``. Unlike ``deviation_colours`` there
+    is no flat green band, so differences inside the tolerance stay visible. The
+    colour shows the size of the deviation, not its sign. Deviations beyond
+    ``missing_threshold`` are magenta, as in the standard heat map.
+
+    Returns:
+        An ``(N, 3)`` array of 0-255 colours.
+    """
+    absolute = np.abs(distances)
+    span = colour_range.high - colour_range.low
+    fraction = np.clip((absolute - colour_range.low) / span, 0.0, 1.0) if span > 0 else 0.0
+    t = colour_range.start + (1.0 - colour_range.start) * fraction
+    colours = _ramp(np.broadcast_to(t, absolute.shape).astype(np.float64), DETAIL_STOPS)
+    colours[absolute > missing_threshold] = MISSING_COLOUR
+    return np.round(colours).astype(np.uint8)
+
+
+@dataclass(frozen=True)
 class HeatMapView:
     """One side view of the heat map.
 
@@ -108,18 +186,34 @@ class HeatMap:
     original: trimesh.Trimesh
     scan: trimesh.Trimesh
 
-    def rgba(self, index: int, missing_threshold: float) -> NDArray[np.uint8]:
-        """Shaded RGBA image of view ``index``; the background is transparent."""
+    def rgba(
+        self, index: int, missing_threshold: float, detail: bool = False
+    ) -> NDArray[np.uint8]:
+        """Shaded RGBA image of view ``index``; the background is transparent.
+
+        With ``detail`` the colours come from ``detail_colours`` over the range of
+        all four views (``detail_range``), so the views share one scale.
+        """
         item = self.views[index]
         mask = item.view.mask
         size = mask.shape[0]
         pixels = np.zeros((size, size, 4), dtype=np.uint8)
-        colours = deviation_colours(item.deviations[mask], self.tolerance, missing_threshold)
+        if detail:
+            colours = detail_colours(
+                item.deviations[mask], self.detail_range(missing_threshold), missing_threshold
+            )
+        else:
+            colours = deviation_colours(item.deviations[mask], self.tolerance, missing_threshold)
         shade = item.view.shade[mask].astype(np.float64) / 255.0
         brightness = MIN_BRIGHTNESS + (1.0 - MIN_BRIGHTNESS) * shade
         pixels[mask, :3] = np.round(colours * brightness[:, None]).astype(np.uint8)
         pixels[mask, 3] = 255
         return pixels
+
+    def detail_range(self, missing_threshold: float) -> DetailRange:
+        """Detail colour range over the visible pixels of all views together."""
+        visible = np.concatenate([item.deviations[item.view.mask] for item in self.views])
+        return detail_range(visible, missing_threshold)
 
     def missing_pct(self, missing_threshold: float) -> float:
         """Percentage of visible pixels (all views together) flagged as missing."""

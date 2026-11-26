@@ -9,7 +9,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QMimeData, QPoint, QPointF, Qt, QUrl  # noqa: E402
 from PySide6.QtGui import QDragEnterEvent, QDropEvent  # noqa: E402
-from PySide6.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtWidgets import QApplication, QFileDialog  # noqa: E402
 
 from mesh_compare.comparison import compare_meshes, load_mesh  # noqa: E402
 from mesh_compare.gui import MainWindow  # noqa: E402
@@ -60,6 +60,44 @@ def test_show_result_fills_table_and_copies(
     assert item is not None and item.text() == "RMS deviation"
     window.copy_results()
     assert app.clipboard().text().startswith("Metric")
+
+
+def test_save_results_writes_chosen_file(
+    window: MainWindow,
+    lumpy_mesh: trimesh.Trimesh,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window.original_zone.set_path(tmp_path / "original.stl")
+    assert not window.save_button.isEnabled()
+    window.show_result(compare_meshes(lumpy_mesh, lumpy_mesh, samples=1_000))
+    assert window.save_button.isEnabled()
+
+    offered: list[str] = []
+
+    def fake_dialog(*args: object) -> tuple[str, str]:
+        offered.append(str(args[2]))
+        return args[2], ""
+
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", fake_dialog)
+    window.save_results()
+    target = tmp_path / "data.txt"
+    assert offered == [str(target)]  # defaults to data.txt next to the original
+    assert target.read_text(encoding="utf-8").startswith("Metric")
+    assert "saved" in window.status.text()
+
+
+def test_save_results_cancel_writes_nothing(
+    window: MainWindow,
+    lumpy_mesh: trimesh.Trimesh,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window.original_zone.set_path(tmp_path / "original.stl")
+    window.show_result(compare_meshes(lumpy_mesh, lumpy_mesh, samples=1_000))
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *args: ("", ""))
+    window.save_results()
+    assert not (tmp_path / "data.txt").exists()
 
 
 def test_worker_reports_success_and_failure() -> None:
@@ -404,3 +442,18 @@ def test_several_cuts_copied_to_other_model(
         assert mesh.bounds[0, 2] > full.bounds[0, 2] + 1
         assert mesh.bounds[1, 2] < full.bounds[1, 2] - 1
     assert trimmed[1].area == pytest.approx(trimmed[0].area, rel=1e-3)
+
+
+def test_output_dir_is_used_and_remembered(window: MainWindow, tmp_path: Path) -> None:
+    assert window.output_dir is None
+    assert not window.output_reset.isEnabled()
+    window.set_output_dir(tmp_path)
+    assert window.output_dir == tmp_path
+    assert window.output_reset.isEnabled()
+    again = MainWindow()
+    try:
+        assert again.output_dir == tmp_path
+    finally:
+        again.close()
+    window.set_output_dir(None)
+    assert window.output_dir is None

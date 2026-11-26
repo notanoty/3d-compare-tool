@@ -19,6 +19,7 @@ dev = ["pytest", "pytest-cov", "mypy", "ruff", "black"]
 
 [project.scripts]
 mesh-compare = "mesh_compare.__main__:main"
+mesh-compare-mcp = "mesh_compare.mcp_server:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -45,5 +46,5 @@ ignore_missing_imports = true
 testpaths = ["tests"]
 
 [[tool.mypy.overrides]]
-module = ["conftest", "test_comparison", "test_gui", "test_heatmap"]
+module = ["conftest", "test_comparison", "test_gui", "test_heatmap", "test_mcp"]
 disallow_untyped_calls = false

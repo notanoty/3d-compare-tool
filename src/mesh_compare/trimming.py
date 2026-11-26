@@ -309,9 +309,10 @@ def default_line(
     return (margin, float(y)), (camera.size - margin, float(y))
 
 
-def trimmed_path(source: Path) -> Path:
-    """Where the trimmed copy of ``source`` is saved: next to it, ``<name>_trimmed.stl``."""
-    return source.with_name(f"{source.stem}_trimmed.stl")
+def trimmed_path(source: Path, output_dir: Path | None = None) -> Path:
+    """Where the trimmed copy of ``source`` is saved: ``<name>_trimmed.stl`` in
+    ``output_dir``, or next to ``source`` when no folder is given."""
+    return (output_dir or source.parent) / f"{source.stem}_trimmed.stl"
 
 
 def copy_cuts(
@@ -328,7 +329,10 @@ def copy_cuts(
 
 
 def trim_files(
-    planes: Sequence[TrimPlane], model_path: Path, other_path: Path | None = None
+    planes: Sequence[TrimPlane],
+    model_path: Path,
+    other_path: Path | None = None,
+    output_dir: Path | None = None,
 ) -> list[Path]:
     """Trim the model (and optionally the other model with the same cuts) and save them.
 
@@ -336,6 +340,7 @@ def trim_files(
         planes: Cuts in ``model_path``'s coordinates.
         model_path: The model the cut was drawn on.
         other_path: Another model to cut at the same places, after aligning it.
+        output_dir: Folder to save into; next to each source file when ``None``.
 
     Returns:
         Paths of the saved trimmed files, model first.
@@ -348,7 +353,7 @@ def trim_files(
 
     saved = []
     for source, trimmed in targets:
-        destination = trimmed_path(source)
+        destination = trimmed_path(source, output_dir)
         trimmed.export(destination)
         saved.append(destination)
     return saved

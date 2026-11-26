@@ -218,3 +218,12 @@ class TestCopyAndSave:
         for path in saved:
             assert load_mesh(path).bounds[0, 2] == pytest.approx(-2.0, abs=0.01)
         assert trim_files([plane], model) == saved[:1]
+
+    def test_trim_files_to_output_dir(self, tmp_path: Path, lumpy_mesh: trimesh.Trimesh) -> None:
+        model, out = tmp_path / "original.stl", tmp_path / "out"
+        out.mkdir()
+        lumpy_mesh.export(model)
+        plane = TrimPlane(np.array([0.0, 0.0, -2.0]), np.array([0.0, 0.0, 1.0]))
+        assert trim_files([plane], model, output_dir=out) == [out / "original_trimmed.stl"]
+        assert (out / "original_trimmed.stl").exists()
+        assert not (tmp_path / "original_trimmed.stl").exists()
